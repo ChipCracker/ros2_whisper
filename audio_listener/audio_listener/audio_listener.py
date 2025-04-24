@@ -1,4 +1,5 @@
 import atexit
+import queue
 
 import numpy as np
 import pyaudio
@@ -16,59 +17,80 @@ class AudioListenerNode(Node):
             namespace="",
             parameters=[
                 ("channels", 1),
-                ("frames_per_buffer", 1000),
+                ("frames_per_buffer", 4000),
                 ("rate", 16000),
             ],
         )
 
-        self.channels_ = (
-            self.get_parameter("channels").get_parameter_value().integer_value
-        )
-        self.frames_per_buffer_ = (
-            self.get_parameter("frames_per_buffer").get_parameter_value().integer_value
-        )
+        self.channels_ = self.get_parameter("channels").get_parameter_value().integer_value
+        self.frames_per_buffer_ = self.get_parameter("frames_per_buffer").get_parameter_value().integer_value
         self.rate_ = self.get_parameter("rate").get_parameter_value().integer_value
 
-        self.pyaudio_ = pyaudio.PyAudio()
-        self.stream_ = self.pyaudio_.open(
-            channels=self.channels_,
-            format=pyaudio.paInt16,
-            input=True,
-            frames_per_buffer=self.frames_per_buffer_,
-            rate=self.rate_,
-        )
+        self.get_logger().info(f"Starte AudioListener mit {self.channels_} Kanal/Kanälen, "
+                               f"Puffer={self.frames_per_buffer_}, Rate={self.rate_} Hz")
+
+        self._audio_queue = queue.Queue()
 
         self.audio_publisher_ = self.create_publisher(
-            Int16MultiArray, "~/audio", qos_profile=qos_profile_sensor_data
+            Int16MultiArray, "~/audio", qos_profile_sensor_data
         )
 
-        self.audio_publisher_timer_ = self.create_timer(
-            float(self.frames_per_buffer_) / float(self.rate_),
-            self.audio_publisher_timer_callback_,
+        self.pyaudio_ = pyaudio.PyAudio()
+
+        def pyaudio_callback(in_data, frame_count, time_info, status):
+            self._audio_queue.put(in_data)
+            return (None, pyaudio.paContinue)
+
+        self.stream_ = self.pyaudio_.open(
+            format=pyaudio.paInt16,
+            channels=self.channels_,
+            rate=self.rate_,
+            input=True,
+            frames_per_buffer=self.frames_per_buffer_,
+            input_device_index=0,
+            stream_callback=pyaudio_callback,
+            start=False
+        )
+
+        self.stream_.start_stream()
+
+        self._timer = self.create_timer(
+            0.05,  # 50 ms
+            self.publish_audio
         )
 
         atexit.register(self.cleanup_)
 
-    def audio_publisher_timer_callback_(self) -> None:
-        audio = self.stream_.read(self.frames_per_buffer_)
-        audio = np.frombuffer(audio, dtype=np.int16)
-        audio_msg = Int16MultiArray()
-        audio_msg.data = audio.tolist()
-        audio_msg.layout.data_offset = 0
-        audio_msg.layout.dim.append(
-            MultiArrayDimension(label="audio", size=self.frames_per_buffer_, stride=1)
-        )
-        self.audio_publisher_.publish(audio_msg)
+    def publish_audio(self):
+        while not self._audio_queue.empty():
+            raw_data = self._audio_queue.get()
+            try:
+                audio_samples = np.frombuffer(raw_data, dtype=np.int16)
+                msg = Int16MultiArray()
+                msg.data = audio_samples.tolist()
+                msg.layout.data_offset = 0
+                msg.layout.dim.append(MultiArrayDimension(
+                    label="audio", size=len(audio_samples), stride=1
+                ))
+                self.audio_publisher_.publish(msg)
+            except Exception as e:
+                self.get_logger().error(f"Fehler beim Verarbeiten von Audio: {e}")
 
     def cleanup_(self):
+        if self.stream_.is_active():
+            self.stream_.stop_stream()
         self.stream_.close()
         self.pyaudio_.terminate()
+        self.get_logger().info("PyAudio geschlossen.")
 
 
 def main(args=None):
     rclpy.init(args=args)
-    audio_listener = AudioListenerNode("audio_listener")
-    rclpy.spin(audio_listener)
+    node = AudioListenerNode("audio_listener")
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     rclpy.shutdown()
 
 

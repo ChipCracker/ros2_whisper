@@ -53,19 +53,19 @@ void Inference::timer_callback()
 void Inference::declare_parameters_() {
   // buffer parameters
   declare_parameter("buffer_capacity", 2);
-  declare_parameter("callback_ms", 200);
+  declare_parameter("callback_ms", 1000);
   declare_parameter("active", false);
 
   // whisper parameters
-  declare_parameter("model_name", "base.en");
+  declare_parameter("model_name", "tiny.en");
   // consider other parameters:
   // https://github.com/ggerganov/whisper.cpp/blob/a4bb2df36aeb4e6cfb0c1ca9fbcf749ef39cc852/whisper.h#L351
   declare_parameter("wparams.language", "en");
-  declare_parameter("wparams.n_threads", 4);
+  declare_parameter("wparams.n_threads", 7);
   declare_parameter("wparams.print_progress", false);
   declare_parameter("cparams.flash_attn", true);
   declare_parameter("cparams.gpu_device", 0);
-  declare_parameter("cparams.use_gpu", true);
+  declare_parameter("cparams.use_gpu", false);
 }
 
 void Inference::initialize_whisper_() {
@@ -125,7 +125,7 @@ void Inference::on_audio_(const std_msgs::msg::Int16MultiArray::SharedPtr msg) {
   if ( !audio_ring_->is_audio_start_set() ) {
     audio_ring_->set_start_timestamp(ros_time_to_chrono(get_clock()->now()));
   }
-  // on_audio_debug_print_(msg);
+  on_audio_debug_print_(msg);
   audio_ring_->enqueue(msg->data);
 }
 
